@@ -1,0 +1,77 @@
+name: Build and Publish
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Unit Tests
+        run: go test -v -race ./...
+
+  build-and-push:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: write  # needed to commit back the updated image tag
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get Bitwarden Secrets
+        uses: bitwarden/sm-action@v2
+        with:
+          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
+          secrets: |
+            JFROG_URL > JFROG_URL
+            JFROG_USERNAME > JFROG_USERNAME
+            JFROG_ACCESS_TOKEN > JFROG_ACCESS_TOKEN
+
+      - name: Set Image Tags
+        id: tags
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          VERSION=$(cat VERSION)
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "image=${{ env.JFROG_URL }}/go-crud-service" >> $GITHUB_OUTPUT
+
+      - name: Docker Login (JFrog)
+        run: echo "${{ env.JFROG_ACCESS_TOKEN }}" | docker login "${{ env.JFROG_URL }}" -u "${{ env.JFROG_USERNAME }}" --password-stdin
+
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.image }}:latest
+            ${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.sha }}
+            ${{ steps.tags.outputs.image }}:v${{ steps.tags.outputs.version }}
+
+      - name: Update dev values with new image tag
+        run: |
+          sed -i "s|tag: .*|tag: \"${{ steps.tags.outputs.sha }}\"|" deployment/values/dev.yaml
+
+      - name: Commit updated image tag (GitOps trigger)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deployment/values/dev.yaml
+          git diff --cached --quiet || git commit -m "ci: update go-crud-service image to ${{ steps.tags.outputs.sha }}"
+          git push

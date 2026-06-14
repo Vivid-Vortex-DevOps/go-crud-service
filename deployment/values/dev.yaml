@@ -1,0 +1,28 @@
+replicaCount: 1
+
+image:
+  repository: ""   # Set by CI: trial7o1gnn.jfrog.io/go-crud-service
+  tag: "latest"
+  pullPolicy: Always
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+env:
+  ENVIRONMENT: dev
+  LOG_LEVEL: debug
+  SERVER_PORT: "8080"
+  OTEL_SERVICE_NAME: go-crud-service
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4317"
+
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: ""  # Set by ArgoCD parameter override
+
+autoscaling:
+  enabled: false

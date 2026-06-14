@@ -1,0 +1,28 @@
+replicaCount: 2
+
+image:
+  repository: ""
+  tag: "latest"
+  pullPolicy: Always
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 300m
+    memory: 384Mi
+
+env:
+  ENVIRONMENT: qa
+  LOG_LEVEL: info
+  SERVER_PORT: "8080"
+  OTEL_SERVICE_NAME: go-crud-service
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4317"
+
+serviceAccount:
+  annotations:
+    azure.workload.identity/client-id: ""
+
+autoscaling:
+  enabled: false
