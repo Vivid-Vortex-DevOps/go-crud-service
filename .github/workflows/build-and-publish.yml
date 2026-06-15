@@ -36,13 +36,13 @@ jobs:
       # Install the Bitwarden Secrets Manager CLI (bws).
       # bws can fetch secrets by name — no UUIDs needed.
       # BW_ACCESS_TOKEN is an org-level secret (non-deployment, read-only access token).
+      # Pinned to bws-v2.1.0: the releases/latest API returns a Python SDK release
+      # (python-v2.1.0), not the bws CLI release — so dynamic discovery breaks.
       - name: Install Bitwarden SM CLI (bws)
         run: |
-          LATEST=$(curl -sf https://api.github.com/repos/bitwarden/sdk-sm/releases/latest \
-            | jq -r '.tag_name')
-          VERSION="${LATEST#bws-v}"
-          ASSET="bws-x86_64-unknown-linux-gnu-${VERSION}.zip"
-          URL="https://github.com/bitwarden/sdk-sm/releases/download/${LATEST}/${ASSET}"
+          BW_VERSION="2.1.0"
+          ASSET="bws-x86_64-unknown-linux-gnu-${BW_VERSION}.zip"
+          URL="https://github.com/bitwarden/sdk-sm/releases/download/bws-v${BW_VERSION}/${ASSET}"
           curl -fsSL "${URL}" -o /tmp/bws.zip
           mkdir -p /tmp/bws-bin
           unzip /tmp/bws.zip -d /tmp/bws-bin
