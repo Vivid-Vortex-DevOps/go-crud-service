@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     permissions:
-      contents: write  # needed to commit back the updated image tag
+      contents: write
 
     steps:
       - name: Checkout
@@ -33,14 +33,60 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get Bitwarden Secrets
-        uses: bitwarden/sm-action@v2
-        with:
-          access_token: ${{ secrets.BW_ACCESS_TOKEN }}
-          secrets: |
-            JFROG_URL > JFROG_URL
-            JFROG_USERNAME > JFROG_USERNAME
-            JFROG_ACCESS_TOKEN > JFROG_ACCESS_TOKEN
+      # Install the Bitwarden Secrets Manager CLI (bws).
+      # bws can fetch secrets by name — no UUIDs needed.
+      # BW_ACCESS_TOKEN is an org-level secret (non-deployment, read-only access token).
+      - name: Install Bitwarden SM CLI (bws)
+        run: |
+          LATEST=$(curl -sf https://api.github.com/repos/bitwarden/sdk-sm/releases/latest \
+            | jq -r '.tag_name')
+          VERSION="${LATEST#bws-v}"
+          ASSET="bws-x86_64-unknown-linux-gnu-${VERSION}.zip"
+          URL="https://github.com/bitwarden/sdk-sm/releases/download/${LATEST}/${ASSET}"
+          curl -fsSL "${URL}" -o /tmp/bws.zip
+          mkdir -p /tmp/bws-bin
+          unzip /tmp/bws.zip -d /tmp/bws-bin
+          find /tmp/bws-bin -name 'bws' -type f -exec sudo install -m 0755 {} /usr/local/bin/bws \;
+          echo "bws installed: $(bws --version)"
+
+      - name: Get JFrog credentials from Bitwarden SM
+        env:
+          BWS_ACCESS_TOKEN: ${{ secrets.BW_ACCESS_TOKEN }}
+        run: |
+          SECRETS=$(bws secret list --output json)
+
+          get_val() {
+            printf '%s' "$SECRETS" | jq -r --arg k "$1" '.[] | select(.key == $k) | .value'
+          }
+
+          JFROG_URL=$(get_val "JFROG_URL")
+          JFROG_USERNAME=$(get_val "JFROG_USERNAME")
+          JFROG_ACCESS_TOKEN=$(get_val "JFROG_ACCESS_TOKEN")
+
+          # Mask all three values so they never appear in logs
+          echo "::add-mask::$JFROG_URL"
+          echo "::add-mask::$JFROG_USERNAME"
+          echo "::add-mask::$JFROG_ACCESS_TOKEN"
+
+          {
+            echo "JFROG_URL=$JFROG_URL"
+            echo "JFROG_USERNAME=$JFROG_USERNAME"
+            echo "JFROG_ACCESS_TOKEN=$JFROG_ACCESS_TOKEN"
+          } >> "$GITHUB_ENV"
+
+      # JFROG_URL may include https:// prefix — Docker login needs hostname only.
+      - name: Prepare registry host
+        id: registry
+        run: |
+          HOST="${JFROG_URL#https://}"
+          HOST="${HOST#http://}"
+          echo "host=${HOST}" >> $GITHUB_OUTPUT
+
+      - name: Docker Login (JFrog)
+        run: |
+          echo "$JFROG_ACCESS_TOKEN" | \
+            docker login "${{ steps.registry.outputs.host }}" \
+              -u "$JFROG_USERNAME" --password-stdin
 
       - name: Set Image Tags
         id: tags
@@ -49,10 +95,7 @@ jobs:
           VERSION=$(cat VERSION)
           echo "sha=${SHA}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "image=${{ env.JFROG_URL }}/go-crud-service" >> $GITHUB_OUTPUT
-
-      - name: Docker Login (JFrog)
-        run: echo "${{ env.JFROG_ACCESS_TOKEN }}" | docker login "${{ env.JFROG_URL }}" -u "${{ env.JFROG_USERNAME }}" --password-stdin
+          echo "image=${{ steps.registry.outputs.host }}/go-crud-service" >> $GITHUB_OUTPUT
 
       - name: Build & Push
         uses: docker/build-push-action@v6
