@@ -1,7 +1,7 @@
 replicaCount: 3
 
 image:
-  repository: ""
+  repository: ghcr.io/vivid-vortex-devops/go-crud-service
   tag: "latest"
   pullPolicy: Always
 
