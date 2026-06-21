@@ -26,6 +26,7 @@ jobs:
     needs: test
     permissions:
       contents: write
+      packages: write    # Required to push to ghcr.io
 
     steps:
       - name: Checkout
@@ -33,60 +34,12 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Install the Bitwarden Secrets Manager CLI (bws).
-      # bws can fetch secrets by name — no UUIDs needed.
-      # BW_ACCESS_TOKEN is an org-level secret (non-deployment, read-only access token).
-      # Pinned to bws-v2.1.0: the releases/latest API returns a Python SDK release
-      # (python-v2.1.0), not the bws CLI release — so dynamic discovery breaks.
-      - name: Install Bitwarden SM CLI (bws)
+      # GHCR is included with every GitHub account — no separate credentials or
+      # Bitwarden secret fetching needed. GITHUB_TOKEN is auto-injected by the runner.
+      - name: Docker Login (GHCR)
         run: |
-          BW_VERSION="2.1.0"
-          ASSET="bws-x86_64-unknown-linux-gnu-${BW_VERSION}.zip"
-          URL="https://github.com/bitwarden/sdk-sm/releases/download/bws-v${BW_VERSION}/${ASSET}"
-          curl -fsSL "${URL}" -o /tmp/bws.zip
-          mkdir -p /tmp/bws-bin
-          unzip /tmp/bws.zip -d /tmp/bws-bin
-          find /tmp/bws-bin -name 'bws' -type f -exec sudo install -m 0755 {} /usr/local/bin/bws \;
-          echo "bws installed: $(bws --version)"
-
-      - name: Get JFrog credentials from Bitwarden SM
-        env:
-          BWS_ACCESS_TOKEN: ${{ secrets.BW_ACCESS_TOKEN }}
-        run: |
-          SECRETS=$(bws secret list --output json)
-
-          get_val() {
-            printf '%s' "$SECRETS" | jq -r --arg k "$1" '.[] | select(.key == $k) | .value'
-          }
-
-          JFROG_URL=$(get_val "JFROG_URL")
-          JFROG_USERNAME=$(get_val "JFROG_USERNAME")
-          JFROG_ACCESS_TOKEN=$(get_val "JFROG_ACCESS_TOKEN")
-
-          # Mask all three values so they never appear in logs
-          echo "::add-mask::$JFROG_URL"
-          echo "::add-mask::$JFROG_USERNAME"
-          echo "::add-mask::$JFROG_ACCESS_TOKEN"
-
-          {
-            echo "JFROG_URL=$JFROG_URL"
-            echo "JFROG_USERNAME=$JFROG_USERNAME"
-            echo "JFROG_ACCESS_TOKEN=$JFROG_ACCESS_TOKEN"
-          } >> "$GITHUB_ENV"
-
-      # JFROG_URL may include https:// prefix — Docker login needs hostname only.
-      - name: Prepare registry host
-        id: registry
-        run: |
-          HOST="${JFROG_URL#https://}"
-          HOST="${HOST#http://}"
-          echo "host=${HOST}" >> $GITHUB_OUTPUT
-
-      - name: Docker Login (JFrog)
-        run: |
-          echo "$JFROG_ACCESS_TOKEN" | \
-            docker login "${{ steps.registry.outputs.host }}" \
-              -u "$JFROG_USERNAME" --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Set Image Tags
         id: tags
@@ -95,7 +48,7 @@ jobs:
           VERSION=$(cat VERSION)
           echo "sha=${SHA}" >> $GITHUB_OUTPUT
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "image=${{ steps.registry.outputs.host }}/go-crud-service" >> $GITHUB_OUTPUT
+          echo "image=ghcr.io/${{ github.repository_owner }}/go-crud-service" >> $GITHUB_OUTPUT
 
       - name: Build & Push
         uses: docker/build-push-action@v6
