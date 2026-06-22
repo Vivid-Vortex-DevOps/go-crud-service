@@ -20,5 +20,8 @@ env:
   OTEL_SERVICE_NAME: go-crud-service
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger.monitoring.svc.cluster.local:4317"
 
+serviceMonitor:
+  enabled: true
+
 autoscaling:
   enabled: false

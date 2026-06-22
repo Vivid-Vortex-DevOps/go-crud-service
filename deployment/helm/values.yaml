@@ -68,6 +68,10 @@ databaseSecret:
   secretName: go-crud-db-credentials
   urlKey: database-url
 
+serviceMonitor:
+  enabled: false
+  interval: 30s
+
 autoscaling:
   enabled: false
   minReplicas: 1
