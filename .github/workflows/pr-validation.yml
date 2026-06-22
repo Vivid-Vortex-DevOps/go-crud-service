@@ -2,12 +2,12 @@ name: PR Validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [local_main]
 
 jobs:
   validate:
     name: Lint, Test & Build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     permissions:
       contents: read
       checks: write

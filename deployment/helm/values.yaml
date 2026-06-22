@@ -63,7 +63,6 @@ env:
   OTEL_SERVICE_NAME: go-crud-service
   OTEL_EXPORTER_OTLP_ENDPOINT: ""
 
-# Secret references — values come from Azure Key Vault via Workload Identity
 # The secret must be created in the namespace before deploying.
 databaseSecret:
   secretName: go-crud-db-credentials

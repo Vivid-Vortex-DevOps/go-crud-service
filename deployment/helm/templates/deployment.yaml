@@ -14,7 +14,6 @@ spec:
     metadata:
       labels:
         {{- include "go-crud-service.selectorLabels" . | nindent 8 }}
-        azure.workload.identity/use: "true"
       annotations:
         {{- toYaml .Values.podAnnotations | nindent 8 }}
     spec:

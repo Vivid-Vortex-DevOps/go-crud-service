@@ -1,0 +1,188 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [local_main]
+
+env:
+  SERVICE_NAME: go-crud-service
+  NAMESPACE: applications-dev
+  KIND_CLUSTER: vvd-local
+
+jobs:
+  init:
+    name: Initialize Build Context
+    runs-on: [self-hosted, linux]
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      sha: ${{ steps.meta.outputs.sha }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Metadata
+        id: meta
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          VERSION=$(cat VERSION)
+          IMAGE_TAG="v${VERSION}-g${SHA}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "### Build Context" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Key | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | ${VERSION} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | ${SHA} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Image Tag | ${IMAGE_TAG} |" >> "$GITHUB_STEP_SUMMARY"
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: [self-hosted, linux]
+    needs: init
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run Unit Tests
+        run: |
+          go test -v -race -coverprofile=coverage.out -count=1 ./...
+      - name: Upload Coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: [self-hosted, linux]
+    needs: init
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run Integration Tests
+        run: |
+          go test -v -race -tags=integration -count=1 ./internal/repository/...
+
+  security-scan:
+    name: Static AppSec Analysis & SBOM
+    runs-on: [self-hosted, linux]
+    needs: init
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go Vet
+        run: go vet ./...
+      - name: Vulnerability Scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+      - name: SBOM Generation
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          syft dir:. -o spdx-json=sbom.spdx.json
+        continue-on-error: true
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
+  build-image:
+    name: Build Service Image
+    runs-on: [self-hosted, linux]
+    needs: [unit-tests, integration-tests, security-scan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ env.SERVICE_NAME }}:${{ needs.init.outputs.image_tag }} \
+                        -t ${{ env.SERVICE_NAME }}:${{ needs.init.outputs.sha }} \
+                        -t ${{ env.SERVICE_NAME }}:latest .
+      - name: Image Scan
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image --exit-code 1 --severity CRITICAL \
+            ${{ env.SERVICE_NAME }}:latest || true
+        continue-on-error: true
+      - name: Load Image into Kind
+        run: |
+          kind load docker-image ${{ env.SERVICE_NAME }}:latest --name ${{ env.KIND_CLUSTER }}
+          kind load docker-image ${{ env.SERVICE_NAME }}:${{ needs.init.outputs.sha }} --name ${{ env.KIND_CLUSTER }}
+    outputs:
+      image_tag: ${{ needs.init.outputs.image_tag }}
+
+  helm-validate:
+    name: Validate Helm Chart
+    runs-on: [self-hosted, linux]
+    needs: build-image
+    steps:
+      - uses: actions/checkout@v4
+      - name: Helm Lint
+        run: helm lint deployment/helm/ -f deployment/values/dev.yaml
+      - name: Helm Template
+        run: helm template ${{ env.SERVICE_NAME }} deployment/helm/ -f deployment/values/dev.yaml
+
+  deploy-dev:
+    name: Deploy to Dev
+    runs-on: [self-hosted, linux]
+    needs: [helm-validate, init]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update Image Tag
+        run: |
+          sed -i "s|tag: .*|tag: \"${{ needs.init.outputs.sha }}\"|" deployment/values/dev.yaml
+      - name: Commit Image Tag Update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deployment/values/dev.yaml
+          git diff --cached --quiet || git commit -m "ci: update ${{ env.SERVICE_NAME }} image to ${{ needs.init.outputs.sha }}"
+          git push
+      - name: Wait for ArgoCD Sync
+        run: |
+          argocd app sync ${{ env.SERVICE_NAME }} --grpc-web --plaintext --server localhost:8080 || true
+          argocd app wait ${{ env.SERVICE_NAME }} --grpc-web --plaintext --server localhost:8080 --timeout 120 || true
+        continue-on-error: true
+      - name: Deployment Summary
+        run: |
+          echo "### Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Key | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Service | ${{ env.SERVICE_NAME }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Namespace | ${{ env.NAMESPACE }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | ${{ needs.init.outputs.image_tag }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ArgoCD | http://localhost:8080/applications/${{ env.SERVICE_NAME }} |" >> "$GITHUB_STEP_SUMMARY"
+
+  smoke-test:
+    name: Post-Deploy Smoke Test
+    runs-on: [self-hosted, linux]
+    needs: deploy-dev
+    steps:
+      - name: Health Check
+        run: |
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=${{ env.SERVICE_NAME }} \
+            -n ${{ env.NAMESPACE }} --timeout=60s
+          kubectl port-forward svc/${{ env.SERVICE_NAME }} 18080:8080 -n ${{ env.NAMESPACE }} &
+          sleep 3
+          curl -sf http://localhost:18080/health/ready
+          kill %1 2>/dev/null || true
+
+  telemetry:
+    name: Collect Pipeline Telemetry
+    runs-on: [self-hosted, linux]
+    needs: smoke-test
+    if: always()
+    steps:
+      - name: Pipeline Summary
+        run: |
+          echo "### Pipeline Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pipeline finished at $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_STEP_SUMMARY"

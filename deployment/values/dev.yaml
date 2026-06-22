@@ -1,9 +1,9 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/vivid-vortex-devops/go-crud-service
+  repository: go-crud-service
   tag: "latest"
-  pullPolicy: Always
+  pullPolicy: Never
 
 resources:
   requests:
@@ -18,11 +18,7 @@ env:
   LOG_LEVEL: debug
   SERVER_PORT: "8080"
   OTEL_SERVICE_NAME: go-crud-service
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.monitoring.svc.cluster.local:4317"
-
-serviceAccount:
-  annotations:
-    azure.workload.identity/client-id: ""  # Set by ArgoCD parameter override
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger.monitoring.svc.cluster.local:4317"
 
 autoscaling:
   enabled: false
